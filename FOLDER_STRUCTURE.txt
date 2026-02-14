@@ -1,0 +1,128 @@
+Astra/
+│
+├── main.py
+├── requirements.txt
+├── README.md
+├── .env.example
+├── .gitignore
+│
+├── config/
+│   ├── __init__.py
+│   ├── settings.yaml
+│   ├── whitelist.yaml
+│   ├── user_profile.yaml
+│   └── prompts.yaml
+│
+├── core/
+│   ├── __init__.py
+│   ├── orchestrator.py
+│   ├── event_loop.py
+│   └── state_machine.py
+│
+├── modules/
+│   │
+│   ├── audio/
+│   │   ├── __init__.py
+│   │   ├── wake_word_detector.py
+│   │   ├── speech_to_text.py
+│   │   ├── text_to_speech.py
+│   │   └── audio_manager.py
+│   │
+│   ├── ai/
+│   │   ├── __init__.py
+│   │   ├── llm_engine.py
+│   │   ├── intent_parser.py
+│   │   ├── command_planner.py
+│   │   └── response_generator.py
+│   │
+│   ├── memory/
+│   │   ├── __init__.py
+│   │   ├── context_manager.py
+│   │   ├── conversation_history.py
+│   │   └── session_state.py
+│   │
+│   └── safety/
+│       ├── __init__.py
+│       ├── whitelist_validator.py
+│       ├── confirmation_handler.py
+│       ├── command_sanitizer.py
+│       └── permission_manager.py
+│
+├── actions/
+│   ├── __init__.py
+│   ├── base_action.py
+│   │
+│   ├── system/
+│   │   ├── __init__.py
+│   │   ├── volume_control.py
+│   │   ├── brightness_control.py
+│   │   ├── power_management.py
+│   │   └── screen_lock.py
+│   │
+│   ├── apps/
+│   │   ├── __init__.py
+│   │   ├── app_launcher.py
+│   │   ├── window_manager.py
+│   │   └── process_manager.py
+│   │
+│   ├── input/
+│   │   ├── __init__.py
+│   │   ├── keyboard_controller.py
+│   │   ├── mouse_controller.py
+│   │   └── clipboard_manager.py
+│   │
+│   ├── browser/
+│   │   ├── __init__.py
+│   │   ├── browser_launcher.py
+│   │   ├── navigation.py
+│   │   ├── search.py
+│   │   └── tab_manager.py
+│   │
+│   ├── messaging/
+│   │   ├── __init__.py
+│   │   ├── whatsapp_controller.py
+│   │   └── message_sender.py
+│   │
+│   └── utilities/
+│       ├── __init__.py
+│       ├── file_operations.py
+│       ├── search_files.py
+│       └── system_info.py
+│
+├── utils/
+│   ├── __init__.py
+│   ├── logger.py
+│   ├── config_loader.py
+│   ├── error_handler.py
+│   └── helpers.py
+│
+├── models/
+│   ├── vosk/
+│   │   └── .gitkeep
+│   ├── whisper/
+│   │   └── .gitkeep
+│   ├── llm/
+│   │   └── .gitkeep
+│   └── wake_word/
+│       └── .gitkeep
+│
+├── logs/
+│   ├── .gitkeep
+│   └── astra.log
+│
+├── data/
+│   ├── user/
+│   │   └── .gitkeep
+│   ├── cache/
+│   │   └── .gitkeep
+│   └── conversations/
+│       └── .gitkeep
+│
+└── tests/
+    ├── __init__.py
+    ├── test_audio.py
+    ├── test_ai.py
+    ├── test_actions.py
+    ├── test_safety.py
+    ├── test_memory.py
+    └── test_integration.py

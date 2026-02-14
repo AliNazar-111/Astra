@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+logs/*.log
+*.log
+
+# Models
+models/vosk/*
+models/whisper/*
+models/llm/*
+models/wake_word/*
+!models/*/.gitkeep
+
+# Data
+data/user/*
+data/cache/*
+data/conversations/*
+!data/*/.gitkeep
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db
