@@ -1,10 +1,11 @@
 """
-Short-Term Memory Module
+Short-Term Memory Module (Hardened)
 Responsible for tracking conversation history and the last executed actions.
-Enables follow-up commands like "do it again".
+Enables follow-up commands and context-aware interactions.
 """
 
 import logging
+import json
 from typing import List, Dict, Optional, Any
 
 # Configure logging
@@ -13,45 +14,47 @@ logger = logging.getLogger(__name__)
 class Memory:
     """
     Manages Astra's short-term context.
-    Stores recent interactions and the last validated plan.
+    Hardened to prevent memory leaks and handle state serialization.
     """
 
-    def __init__(self, max_history: int = 10):
-        """
-        Initialize the memory buffer.
-        
-        Args:
-            max_history (int): Maximum number of command-response pairs to keep.
-        """
+    def __init__(self, max_history: int = 15):
         self.max_history = max_history
         self.history: List[Dict[str, str]] = []  # List of {'user': text, 'astra': text}
         self.last_plan: Optional[Dict[str, Any]] = None
         self.active_context: Dict[str, Any] = {}
 
     def update_history(self, user_text: str, astra_response: str):
-        """Adds a new interaction to history."""
-        self.history.append({
-            "user": user_text,
-            "astra": astra_response
-        })
-        
-        # Keep within bounds
-        if len(self.history) > self.max_history:
-            self.history.pop(0)
-            
-        logger.info(f"Memory updated with interaction: {user_text[:20]}...")
+        """Adds a new interaction to history with size safety."""
+        if not user_text and not astra_response:
+            return
 
-    def set_last_plan(self, plan: Dict[str, Any]):
+        entry = {
+            "user": str(user_text or ""),
+            "astra": str(astra_response or "")
+        }
+        
+        self.history.append(entry)
+        
+        # Enforce history limit to avoid memory growth
+        if len(self.history) > self.max_history:
+            self.history = self.history[-self.max_history:]
+            
+        logger.debug(f"Memory entry added. Current history size: {len(self.history)}")
+
+    def set_last_plan(self, plan: Any):
         """Stores the most recent validated execution plan."""
-        self.last_plan = plan
-        logger.info("Most recent plan stored in memory.")
+        if isinstance(plan, dict):
+            self.last_plan = plan
+            logger.debug("Active plan stored in memory.")
+        else:
+            logger.warning("Attempted to store invalid plan format in memory.")
 
     def get_last_plan(self) -> Optional[Dict[str, Any]]:
         """Retrieves the previous plan for repetition or reference."""
         return self.last_plan
 
     def get_full_context(self) -> List[Dict[str, str]]:
-        """Returns the conversation history for context usage."""
+        """Returns the conversation history."""
         return self.history
 
     def clear(self):
@@ -59,15 +62,26 @@ class Memory:
         self.history = []
         self.last_plan = None
         self.active_context = {}
-        logger.info("Short-term memory cleared.")
+        logger.info("Memory buffer flushed.")
 
-    def set_context_value(self, key: str, value: Any):
-        """Stores a specific piece of context information."""
-        self.active_context[key] = value
+    def to_json(self) -> str:
+        """Serializes current memory state for potential persistence."""
+        try:
+            return json.dumps({
+                "history": self.history,
+                "last_plan": self.last_plan,
+                "active_context": self.active_context
+            })
+        except Exception as e:
+            logger.error(f"Memory serialization failed: {e}")
+            return "{}"
 
-    def get_context_value(self, key: str) -> Optional[Any]:
-        """Retrieves a specific value from active context."""
-        return self.active_context.get(key)
+if __name__ == "__main__":
+    # Test script
+    logging.basicConfig(level=logging.INFO)
+    mem = Memory()
+    mem.update_history("hello", "hi there")
+    print(f"Serialized: {mem.to_json()}")
 
 if __name__ == "__main__":
     # Test script

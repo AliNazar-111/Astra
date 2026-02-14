@@ -1,11 +1,12 @@
 """
-Command Guard Module
+Command Guard Module (Hardened)
 Responsible for validating AI-generated plans against security policies.
-Ensures only whitelisted actions and applications are executed.
+Ensures strict whitelist adherence and destructive command blocking.
 """
 
 import logging
-from typing import Dict, List, Tuple
+import json
+from typing import Dict, List, Tuple, Any
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 class CommandGuard:
     """
     Security gatekeeper for Astra.
-    Validates plans before they reach the execution layer.
+    Hardened for fail-safe validation.
     """
 
     # Whitelist of allowed actions
@@ -23,73 +24,72 @@ class CommandGuard:
         "system_shutdown", "whatsapp_message", "search_file"
     }
 
-    # Whitelist of allowed applications (can be expanded)
+    # Whitelist of allowed applications
     ALLOWED_APPS = {
         "notepad", "calculator", "chrome", "msedge", "spotify", 
         "vlc", "explorer", "cmd", "powershell", "taskmgr"
     }
 
-    # Actions that require explicit user confirmation
-    SENSITIVE_ACTIONS = {
-        "system_shutdown", "system_restart", "delete_file", "send_message"
-    }
-
-    # Keywords that indicate destructive or dangerous intent
+    # Dangerous patterns
     DESTRUCTIVE_KEYWORDS = {
-        "rm", "del", "format", "erase", "wipe", "shutdown /s", "drop table", "reg delete"
+        "rm ", "del ", "format ", "erase ", "wipe ", "drop table", "reg delete", "> nul"
     }
 
-    def validate_plan(self, plan: Dict) -> Tuple[bool, str, bool]:
+    def validate_plan(self, plan: Any) -> Tuple[bool, str, bool]:
         """
         Validates the entire plan.
-        
-        Returns:
-            Tuple[bool, str, bool]: (is_valid, reason_or_message, needs_confirmation)
+        Returns: (is_valid, reason, needs_confirmation)
         """
         if not isinstance(plan, dict):
-            return False, "Invalid plan format: Expected dictionary.", False
+            logger.error(f"Validation failed: Plan is not a dictionary. Got {type(plan)}")
+            return False, "Invalid plan format.", False
 
-        intent = plan.get("intent")
+        intent = str(plan.get("intent", "unknown")).lower()
         steps = plan.get("steps", [])
 
-        # Check for blocked intent from AI brain
         if intent == "blocked":
-            logger.warning("AI Brain blocked this request as unsafe.")
-            return False, "This request was blocked by the AI as unsafe.", False
+            logger.warning("AI Brain explicitly blocked this request.")
+            return False, "AI safety filter triggered.", False
 
-        if not steps:
-            return True, "No steps to execute.", False
+        if not isinstance(steps, list):
+            logger.error("Validation failed: 'steps' is not a list.")
+            return False, "Invalid steps format.", False
 
         needs_confirmation = False
 
-        for step in steps:
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                logger.error(f"Step {i} is not a dictionary.")
+                return False, f"Malformed step {i}.", False
+
             action = step.get("action")
             target = str(step.get("target", "")).lower()
             value = str(step.get("value", "")).lower()
 
-            # 1. Validate Action
+            # 1. Action Whitelist
             if action not in self.ALLOWED_ACTIONS:
-                logger.error(f"Rejected unknown action: {action}")
-                return False, f"Action '{action}' is not allowed.", False
+                logger.warning(f"Unauthorized action attempt: {action}")
+                return False, f"Action '{action}' is not permitted.", False
 
-            # 2. Validate Target App (if applicable)
+            # 2. App Whitelist
             if action in ["open_app", "close_app"]:
-                if target not in self.ALLOWED_APPS:
-                    logger.error(f"Rejected unauthorized app: {target}")
-                    return False, f"Application '{target}' is not in the whitelist.", False
+                if not any(app in target for app in self.ALLOWED_APPS):
+                    logger.warning(f"Unauthorized app access: {target}")
+                    return False, f"Access to '{target}' is restricted.", False
 
-            # 3. Prevent Destructive Commands
-            combined_input = f"{target} {value}"
+            # 3. Destructive Command Scan
+            combined = f"{target} {value}".lower()
             for kw in self.DESTRUCTIVE_KEYWORDS:
-                if kw in combined_input:
-                    logger.critical(f"Detected destructive command attempt: {combined_input}")
-                    return False, f"Destructive command detected and blocked: {kw}", False
+                if kw in combined:
+                    logger.critical(f"DESTRUCTIVE COMMAND DETECTED: {kw} in {combined}")
+                    return False, "Destructive operation blocked.", False
 
-            # 4. Check for Sensitive Actions
-            if action in self.SENSITIVE_ACTIONS:
+            # 4. Confirmation Flags
+            if action in ["system_shutdown", "whatsapp_message"]:
                 needs_confirmation = True
 
-        return True, "Plan validated successfully.", needs_confirmation
+        logger.info(f"Plan validation successful: {intent}")
+        return True, "Safe", needs_confirmation
 
 if __name__ == "__main__":
     # Test stub

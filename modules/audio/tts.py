@@ -1,12 +1,14 @@
 """
-Text-to-Speech Module
+Text-to-Speech Module (Hardened)
 Handles offline voice synthesis for Astra.
-Uses pyttsx3 for deterministic, queue-safe audio output.
+Ensures non-blocking audio output and initialization safety.
 """
 
 import pyttsx3
 import logging
 import threading
+import queue
+import time
 from typing import Optional
 
 # Configure logging
@@ -15,75 +17,96 @@ logger = logging.getLogger(__name__)
 class TTS:
     """
     Offline Text-to-Speech engine.
-    Managed as a singleton or with a shared queue to ensure sequential speaking.
+    Managed with a background thread queue to prevent UI/Execution freezes.
     """
 
     def __init__(self, rate: int = 180, volume: float = 1.0, voice_index: int = 0):
-        """
-        Initialize the TTS engine.
-        
-        Args:
-            rate (int): Words per minute.
-            volume (float): Volume level (0.0 to 1.0).
-            voice_index (int): Index of the installed voice to use.
-        """
-        self.engine = pyttsx3.init()
         self.rate = rate
         self.volume = volume
         self.voice_index = voice_index
         
-        # Configure initial settings
-        self.engine.setProperty('rate', self.rate)
-        self.engine.setProperty('volume', self.volume)
+        self.speech_queue = queue.Queue()
+        self._stop_event = threading.Event()
         
-        # Set voice
-        voices = self.engine.getProperty('voices')
-        if voices:
-            # Safely select voice
-            idx = min(self.voice_index, len(voices) - 1)
-            self.engine.setProperty('voice', voices[idx].id)
-            logger.info(f"TTS initialized with voice: {voices[idx].name}")
+        # Start background worker for speech
+        self.worker_thread = threading.Thread(target=self._speech_worker, daemon=True)
+        self.worker_thread.start()
+        logger.info("TTS background worker started.")
 
-        self._lock = threading.Lock()
+    def _speech_worker(self):
+        """Processes the speech queue in a separate thread to avoid blocking."""
+        engine = None
+        try:
+            engine = pyttsx3.init()
+            engine.setProperty('rate', self.rate)
+            engine.setProperty('volume', self.volume)
+            
+            voices = engine.getProperty('voices')
+            if voices:
+                idx = min(self.voice_index, len(voices) - 1)
+                engine.setProperty('voice', voices[idx].id)
+        except Exception as e:
+            logger.error(f"Failed to initialize TTS engine: {e}")
+            return
 
-    def speak(self, text: str, block: bool = True):
-        """
-        Synthesizes speech from text.
-        
+        while not self._stop_event.is_set():
+            try:
+                # Wait for text to speak (with timeout to check stop_event)
+                text = self.speech_queue.get(timeout=1.0)
+                if text:
+                    logger.debug(f"Synthesizing speech: '{text}'")
+                    engine.say(text)
+                    engine.runAndWait()
+                self.speech_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                logger.error(f"TTS Worker Error during synthesis: {e}")
+                # Try to re-init engine if it crashes
+                try:
+                    engine = pyttsx3.init()
+                except:
+                    pass
+
+    def speak(self, text: str, block: bool = False):
+        """ 
+        Adds text to the speech queue. 
         Args:
-            text (str): The text to speak.
-            block (bool): Whether to wait for speaking to finish.
+            text (str): Message to speak.
+            block (bool): If True, waits for text to be processed (not recommended for main loop).
         """
         if not text:
             return
 
-        logger.info(f"Speaking: '{text}'")
+        self.speech_queue.put(text)
         
-        # Use a lock to ensure thread-safely speaking one message at a time
-        def _perform_speak():
-            with self._lock:
-                try:
-                    self.engine.say(text)
-                    self.engine.runAndWait()
-                except Exception as e:
-                    logger.error(f"TTS Error: {e}")
-
         if block:
-            _perform_speak()
-        else:
-            threading.Thread(target=_perform_speak, daemon=True).start()
+            self.speech_queue.join()
+
+    def stop(self):
+        """Stops the worker thread."""
+        self._stop_event.set()
+        logger.info("TTS worker thread signaled to stop.")
 
     def set_rate(self, rate: int):
-        """Adjusts the speaking speed (WPM)."""
-        self.rate = rate
-        self.engine.setProperty('rate', self.rate)
-        logger.info(f"TTS rate set to: {rate}")
+        self.rate = rate # Note: Changes will apply to next engine re-init or 
+                         # we could add a dynamic parameter check in worker
+        logger.info(f"TTS target rate: {rate}")
 
     def set_volume(self, volume: float):
-        """Adjusts the volume (0.0 to 1.0)."""
         self.volume = max(0.0, min(1.0, volume))
-        self.engine.setProperty('volume', self.volume)
-        logger.info(f"TTS volume set to: {self.volume}")
+        logger.info(f"TTS target volume: {self.volume}")
+
+if __name__ == "__main__":
+    # Test script
+    logging.basicConfig(level=logging.INFO)
+    tts = TTS()
+    tts.speak("Hardening test one.", block=True)
+    tts.speak("Hardening test two, non-blocking.")
+    print("This line prints immediately while Astra speaks test two.")
+    time.sleep(3)
+    tts.stop()
+
 
 if __name__ == "__main__":
     # Test script

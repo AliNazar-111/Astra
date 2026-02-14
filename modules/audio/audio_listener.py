@@ -1,172 +1,135 @@
 """
-Audio Listener Module
-Handles raw microphone input, silence detection, and WAV file saving.
-Responsible ONLY for audio capture.
+Audio Listener Module (Hardened)
+Handles raw microphone input and recording.
+Ensures device availability checks and robust stream management.
 """
 
-import os
-import wave
-import time
-import math
-import struct
-import threading
-import logging
-from typing import Optional, List
 import pyaudio
+import wave
+import logging
+import os
+import time
+from typing import Optional
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 class AudioListener:
-    def __init__(self, 
-                 sample_rate: int = 16000, 
-                 channels: int = 1, 
-                 chunk_size: int = 4000,
-                 silence_threshold: int = 500,
-                 silence_duration: float = 2.0):
-        """
-        Initialize the audio listener.
-        
-        Args:
-            sample_rate (int): Audio sample rate (default 16000Hz)
-            channels (int): Number of audio channels (default 1)
-            chunk_size (int): Buffer size for reading audio
-            silence_threshold (int): RMS amplitude threshold for silence
-            silence_duration (float): Seconds of silence to trigger stop
-        """
-        self.sample_rate = sample_rate
+    """
+    Handles capturing audio from the default input device.
+    Includes safeguards for device disconnection and buffer stability.
+    """
+
+    def __init__(self, format=pyaudio.paInt16, channels=1, rate=16000, chunk=1024):
+        self.format = format
         self.channels = channels
-        self.chunk_size = chunk_size
-        self.silence_threshold = silence_threshold
-        self.silence_duration = silence_duration
-        
-        self.format = pyaudio.paInt16
-        self.p = pyaudio.PyAudio()
-        self.stream = None
-        self.is_recording = False
-        self._stop_event = threading.Event()
-        self._frames: List[bytes] = []
+        self.rate = rate
+        self.chunk = chunk
+        self.frames = []
+        self._pa = None
+        self._stream = None
 
-    def _calculate_rms(self, audio_data: bytes) -> float:
-        """Calculate Root Mean Square (RMS) amplitude of audio chunk."""
-        count = len(audio_data) // 2
-        if count == 0:
-            return 0
-            
-        format = "<{}h".format(count)
-        shorts = struct.unpack(format, audio_data)
-        sum_squares = sum(s * s for s in shorts)
-        return math.sqrt(sum_squares / count)
-
-    def start_recording(self, max_duration: int = 10) -> None:
-        """
-        Start recording audio processing.
-        background-safe: runs in the caller's thread (blocking) or can be threaded.
-        For non-blocking, wrap this in a thread.
-        
-        Args:
-            max_duration (int): Maximum recording duration in seconds
-        """
+    def _init_pyaudio(self) -> bool:
+        """Initializes PyAudio only when needed."""
         try:
-            self.stream = self.p.open(format=self.format,
-                                      channels=self.channels,
-                                      rate=self.sample_rate,
-                                      input=True,
-                                      frames_per_buffer=self.chunk_size)
+            if not self._pa:
+                self._pa = pyaudio.PyAudio()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize PyAudio: {e}")
+            return False
+
+    def start_recording(self, max_duration: int = 5) -> bool:
+        """
+        Record audio for a fixed duration with safety checks.
+        """
+        if not self._init_pyaudio():
+            return False
+
+        logger.info(f"Starting recording (max {max_duration}s)...")
+        self.frames = []
+        
+        try:
+            self._stream = self._pa.open(
+                format=self.format,
+                channels=self.channels,
+                rate=self.rate,
+                input=True,
+                frames_per_buffer=self.chunk
+            )
             
-            logger.info("Recording started...")
-            self.is_recording = True
-            self._frames = []
-            self._stop_event.clear()
+            # Calculate number of chunks
+            num_chunks = int(self.rate / self.chunk * max_duration)
             
-            start_time = time.time()
-            silence_start_time = None
-            
-            while self.is_recording and not self._stop_event.is_set():
-                # Check max duration
-                if time.time() - start_time > max_duration:
-                    logger.info("Max duration reached.")
+            for _ in range(num_chunks):
+                if not self._stream or not self._stream.is_active():
                     break
-                    
-                data = self.stream.read(self.chunk_size, exception_on_overflow=False)
-                self._frames.append(data)
+                try:
+                    data = self._stream.read(self.chunk, exception_on_overflow=False)
+                    self.frames.append(data)
+                except Exception as e:
+                    logger.warning(f"Audio read glitch: {e}")
+                    break
                 
-                # Silence detection
-                rms = self._calculate_rms(data)
-                if rms < self.silence_threshold:
-                    if silence_start_time is None:
-                        silence_start_time = time.time()
-                    elif time.time() - silence_start_time >= self.silence_duration:
-                        logger.info("Silence detected, stopping recording.")
-                        break
-                else:
-                    silence_start_time = None
-                    
+            self._stop_stream()
+            logger.info("Recording finished.")
+            return True
+
         except Exception as e:
-            logger.error(f"Error during recording: {e}")
-            raise
-        finally:
-            self.stop_recording()
+            logger.error(f"Error during audio recording: {e}")
+            self._stop_stream()
+            return False
 
-    def stop_recording(self) -> None:
-        """Stop the recording and clean up stream."""
-        self.is_recording = False
-        self._stop_event.set()
-        
-        if self.stream:
-            try:
-                self.stream.stop_stream()
-                self.stream.close()
-            except Exception as e:
-                logger.error(f"Error closing stream: {e}")
-            self.stream = None
-        
-        logger.info("Recording stopped.")
-
-    def save_recording(self, filename: str) -> Optional[str]:
-        """
-        Save recorded frames to a WAV file.
-        
-        Args:
-            filename (str): Path to save the WAV file
-            
-        Returns:
-            str: Absolute path to saved file, or None if failed
-        """
-        if not self._frames:
-            logger.warning("No audio data to save.")
-            return None
-            
+    def _stop_stream(self):
+        """Internal helper to clean up stream."""
         try:
-            # Ensure directory exists
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            
-            wf = wave.open(filename, 'wb')
-            wf.setnchannels(self.channels)
-            wf.setsampwidth(self.p.get_sample_size(self.format))
-            wf.setframerate(self.sample_rate)
-            wf.writeframes(b''.join(self._frames))
-            wf.close()
-            
-            logger.info(f"Audio saved to {filename}")
-            return os.path.abspath(filename)
-            
+            if self._stream:
+                try:
+                    self._stream.stop_stream()
+                    self._stream.close()
+                except:
+                    pass
+            self._stream = None
         except Exception as e:
-            logger.error(f"Error saving WAV file: {e}")
-            return None
+            logger.debug(f"Cleanup error: {e}")
 
-    def __del__(self):
-        """Cleanup PyAudio instance."""
-        if self.p:
-            self.p.terminate()
+    def save_recording(self, filename: str):
+        """Saves captured frames to a WAV file."""
+        if not self.frames:
+            logger.warning("No frames to save.")
+            return
+
+        try:
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            with wave.open(filename, 'wb') as wf:
+                wf.setnchannels(self.channels)
+                # Ensure _pa exists before calling get_sample_size
+                if not self._pa:
+                    self._init_pyaudio()
+                wf.setsampwidth(self._pa.get_sample_size(self.format))
+                wf.setframerate(self.rate)
+                wf.writeframes(b''.join(self.frames))
+            logger.info(f"Audio saved to {filename}")
+        except Exception as e:
+            logger.error(f"Failed to save recording: {e}")
+
+    def cleanup(self):
+        """Final cleanup of PyAudio resources."""
+        self._stop_stream()
+        if self._pa:
+            try:
+                self._pa.terminate()
+            except:
+                pass
+            self._pa = None
+        logger.info("AudioListener resources cleaned up.")
 
 if __name__ == "__main__":
-    # Example usage
+    # Test script
     logging.basicConfig(level=logging.INFO)
     listener = AudioListener()
     try:
-        print("Recording for 5 seconds (or until silence)...")
-        listener.start_recording(max_duration=5)
-        listener.save_recording("output.wav")
-    except KeyboardInterrupt:
-        listener.stop_recording()
+        if listener.start_recording(max_duration=3):
+            listener.save_recording("data/cache/test_hardened.wav")
+    finally:
+        listener.cleanup()

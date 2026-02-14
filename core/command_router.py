@@ -1,10 +1,11 @@
 """
-Command Router Module
-Responsible for routing validated JSON steps to their respective action handlers.
-Sequentially executes steps and reports status.
+Command Router Module (Hardened)
+Routes validated JSON steps to action handlers.
+Ensures fail-safe execution and robust error reporting.
 """
 
 import logging
+import traceback
 from typing import Dict, List, Any
 
 # Configure logging
@@ -12,122 +13,124 @@ logger = logging.getLogger(__name__)
 
 class CommandRouter:
     """
-    The central hub for distributing tasks to automation sub-modules.
-    It does not contain execution logic itself; it routes requests.
+    The central distribution hub for automation.
+    Hardened to handle missing sub-modules and runtime execution errors.
     """
 
     def __init__(self):
-        # In a real implementation, we would import and instantiate the actual handlers here.
-        # For now, we define a mapping or a placeholder structure.
-        self.action_map = {
-            "open_app": self._handle_app_launch,
-            "close_app": self._handle_app_launch,
-            "type_text": self._handle_input,
-            "mouse_click": self._handle_input,
-            "search_browser": self._handle_browser,
-            "volume_control": self._handle_system,
-            "brightness_control": self._handle_system,
-            "system_shutdown": self._handle_system,
-            "whatsapp_message": self._handle_messaging,
-            "search_file": self._handle_utilities
-        }
+        # Lazy loading of specialized handlers to save memory
+        self._handlers = {}
 
-    def execute_plan(self, plan: Dict) -> List[Dict[str, Any]]:
+    def execute_plan(self, plan: Any) -> List[Dict[str, Any]]:
         """
-        Iterates through the steps in a plan and routes them.
+        Sequentially executes steps and provides a robust execution report.
         """
+        if not isinstance(plan, dict) or "steps" not in plan:
+            logger.error("Router received invalid plan.")
+            return [{"status": "fatal_error", "message": "Invalid plan structure"}]
+
         steps = plan.get("steps", [])
-        execution_report = []
+        report = []
 
-        logger.info(f"Starting execution of plan with {len(steps)} steps.")
+        logger.info(f"Routing {len(steps)} steps for intent: {plan.get('intent')}")
 
         for i, step in enumerate(steps):
             action = step.get("action")
-            logger.info(f"Routing step {i+1}: {action}")
+            logger.info(f"Step {i+1}: {action}")
 
-            handler = self.action_map.get(action)
-            
-            if handler:
-                try:
-                    # Route to the appropriate handler
-                    status = handler(step)
-                    execution_report.append({
-                        "step": i + 1,
-                        "action": action,
-                        "status": "success" if status else "failed"
-                    })
-                    
-                    if not status:
-                        logger.error(f"Step {i+1} ({action}) failed. Stopping sequential execution.")
-                        break
-                except Exception as e:
-                    logger.error(f"Exception during step {i+1} execution: {e}")
-                    execution_report.append({
-                        "step": i + 1,
-                        "action": action,
-                        "status": "error",
-                        "message": str(e)
-                    })
-                    break
-            else:
-                logger.warning(f"No handler found for action: {action}")
-                execution_report.append({
+            try:
+                success = self._dispatch(step)
+                report.append({
                     "step": i + 1,
                     "action": action,
-                    "status": "not_implemented"
+                    "status": "success" if success else "failed"
+                })
+                
+                if not success:
+                    logger.warning(f"Stop-on-failure: Step {i+1} ({action}) failed.")
+                    break
+                    
+            except Exception as e:
+                error_trace = traceback.format_exc()
+                logger.error(f"Execution crash in step {i+1} ({action}): {e}\n{error_trace}")
+                report.append({
+                    "step": i + 1,
+                    "action": action,
+                    "status": "error",
+                    "message": str(e)
                 })
                 break
 
-        return execution_report
+        return report
 
-    # --- Router Handlers (Placeholders delegating to actions/ directory) ---
+    def _dispatch(self, step: Dict) -> bool:
+        """Dynamically routes to the correct handler."""
+        action = step.get("action")
+        
+        # Mapping to internal handler methods
+        # This keeps the router high-level and clean
+        router_map = {
+            "open_app": ("system", "open_app"),
+            "close_app": ("system", "close_app"),
+            "switch_window": ("system", "switch_window"),
+            "type_text": ("system", "type_text"),
+            "volume_control": ("system", "control_volume"),
+            "search_browser": ("browser", "open_url"),
+            "whatsapp_message": ("whatsapp", "send_message")
+        }
 
-    def _handle_app_launch(self, step: Dict) -> bool:
-        """Routes to actions/apps/app_launcher.py"""
-        from actions.apps.app_launcher import AppLauncher
-        # Implementation will instantiate specific handler
-        logger.info(f"Delegating to AppLauncher: {step}")
-        return True # Placeholder success
+        if action not in router_map:
+            logger.error(f"No dispatch rule for action: {action}")
+            return False
 
-    def _handle_input(self, step: Dict) -> bool:
-        """Routes to actions/input/keyboard_controller.py or mouse_controller.py"""
-        logger.info(f"Delegating to InputController: {step}")
-        return True # Placeholder success
+        module_type, method_name = router_map[action]
+        handler = self._get_handler(module_type)
+        
+        if not handler:
+            logger.error(f"Missing handler module: {module_type}")
+            return False
 
-    def _handle_browser(self, step: Dict) -> bool:
-        """Routes to actions/browser/browser_launcher.py"""
-        logger.info(f"Delegating to BrowserController: {step}")
-        return True # Placeholder success
+        # Execute the method on the handler instance
+        try:
+            method = getattr(handler, method_name)
+            
+            # Special handling for argument passing
+            # This would be expanded as we add more actions
+            if module_type == "system":
+                if action in ["open_app", "close_app", "switch_window"]:
+                    return method(step.get("target"))
+                elif action == "type_text":
+                    return method(step.get("value"))
+                elif action == "volume_control":
+                    return method(step.get("target"), amount=int(step.get("value", 1)))
+            
+            elif module_type == "browser":
+                return method(step.get("value") or step.get("target"))
+            
+            elif module_type == "whatsapp":
+                return method(step.get("target"), step.get("value"))
 
-    def _handle_system(self, step: Dict) -> bool:
-        """Routes to actions/system/ handlers"""
-        logger.info(f"Delegating to SystemController: {step}")
-        return True # Placeholder success
+        except Exception as e:
+            logger.error(f"Dispatch logic error for {action}: {e}")
+            return False
 
-    def _handle_messaging(self, step: Dict) -> bool:
-        """Routes to actions/messaging/whatsapp_controller.py"""
-        logger.info(f"Delegating to MessagingController: {step}")
-        return True # Placeholder success
+    def _get_handler(self, module_type: str) -> Any:
+        """Lazy loads and caches action modules."""
+        if module_type in self._handlers:
+            return self._handlers[module_type]
 
-    def _handle_utilities(self, step: Dict) -> bool:
-        """Routes to actions/utilities/ handlers"""
-        logger.info(f"Delegating to UtilitiesController: {step}")
-        return True # Placeholder success
-
-if __name__ == "__main__":
-    # Test stub
-    logging.basicConfig(level=logging.INFO)
-    router = CommandRouter()
-    
-    test_plan = {
-        "intent": "open_app",
-        "steps": [
-            {"action": "open_app", "target": "notepad", "value": ""},
-            {"action": "type_text", "target": "notepad", "value": "Hello Astra"}
-        ]
-    }
-    
-    report = router.execute_plan(test_plan)
-    print("Execution Report:")
-    for r in report:
-        print(r)
+        try:
+            if module_type == "system":
+                from actions.system_actions import SystemActions
+                self._handlers[module_type] = SystemActions()
+            elif module_type == "browser":
+                from actions.browser_actions import BrowserActions
+                self._handlers[module_type] = BrowserActions()
+            elif module_type == "whatsapp":
+                from actions.whatsapp_actions import WhatsAppActions
+                self._handlers[module_type] = WhatsAppActions()
+            
+            return self._handlers.get(module_type)
+        except ImportError as e:
+            logger.error(f"Failed to import action module '{module_type}': {e}")
+            return None
